@@ -173,9 +173,22 @@ defmodule OBRC.Worker do
           true = :ets.insert_new(table, {station, temp, temp, temp, 1})
 
         [{_key, sumtemp, mintemp, maxtemp, cnt}] ->
-          :ets.insert(
+          updates =
+            if temp < mintemp or temp > maxtemp do
+              [
+                {2, sumtemp + temp},
+                {3, min(mintemp, temp)},
+                {4, max(maxtemp, temp)},
+                {5, cnt + 1}
+              ]
+            else
+              [{2, sumtemp + temp}, {5, cnt + 1}]
+            end
+
+          :ets.update_element(
             table,
-            {station, sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1}
+            station,
+            updates
           )
       end
     end

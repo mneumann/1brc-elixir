@@ -2,12 +2,7 @@ defmodule OBRC do
   def run([filename]) do
     break_file_into_blocks_of_lines!(filename)
     |> process_in_parallel(&worker/1)
-    |> Enum.reduce(
-      %{},
-      &Map.merge(&1, &2, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
-        {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
-      end)
-    )
+    |> merge_parallel_results()
     |> format_results()
     |> IO.puts()
   end
@@ -108,6 +103,16 @@ defmodule OBRC do
         parse_lines(lazy_lines.(), update_table)
         worker_loop(request_work, update_table)
     end
+  end
+
+  def merge_parallel_results(results) do
+    results
+    |> Enum.reduce(
+      %{},
+      &Map.merge(&1, &2, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
+        {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
+      end)
+    )
   end
 
   defp format_results(results) do

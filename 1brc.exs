@@ -170,21 +170,25 @@ defmodule OBRC.Worker do
     update_table = fn station, temp ->
       case :ets.lookup(table, station) do
         [] ->
-          true = :ets.insert_new(table, {station, temp, encode_minmax(temp, temp), 1})
+          true =
+            :ets.insert_new(table, {station, encode_sumcnt(temp, 1), encode_minmax(temp, temp)})
 
-        [{_key, sumtemp, minmaxtemp, cnt}] ->
-          mintemp = decode_min(minmaxtemp)
-          maxtemp = decode_max(minmaxtemp)
+        [{_key, sumcnt, minmax}] ->
+          mintemp = decode_min(minmax)
+          maxtemp = decode_max(minmax)
+          sumtemp = decode_sum(sumcnt)
+          cnt = decode_cnt(sumcnt)
+
+          new_sumcnt = encode_sumcnt(sumtemp + temp, cnt + 1)
 
           updates =
             if temp < mintemp or temp > maxtemp do
               [
-                {2, sumtemp + temp},
-                {3, encode_minmax(min(mintemp, temp), max(maxtemp, temp))},
-                {4, cnt + 1}
+                {2, new_sumcnt},
+                {3, encode_minmax(min(mintemp, temp), max(maxtemp, temp))}
               ]
             else
-              [{2, sumtemp + temp}, {4, cnt + 1}]
+              {2, new_sumcnt}
             end
 
           :ets.update_element(
@@ -200,8 +204,9 @@ defmodule OBRC.Worker do
     # Convert ETS to Map
     map =
       :ets.tab2list(table)
-      |> Enum.map(fn {station, sum, minmax, cnt} ->
-        {station, {sum, decode_min(minmax), decode_max(minmax), cnt}}
+      |> Enum.map(fn {station, sumcnt, minmax} ->
+        {station,
+         {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
       end)
       |> Enum.into(%{})
 
@@ -223,6 +228,7 @@ defmodule OBRC.Worker do
 
   @coldest_temp 100_0
 
+  @compile {:inline, encode_minmax: 2}
   defp encode_minmax(min, max) do
     Bitwise.bor(
       Bitwise.bsl(max + @coldest_temp, 16),
@@ -230,13 +236,22 @@ defmodule OBRC.Worker do
     )
   end
 
-  defp decode_min(minmax) do
-    Bitwise.band(minmax, 0xFFFF) - @coldest_temp
+  @compile {:inline, encode_sumcnt: 2}
+  defp encode_sumcnt(sum, cnt) do
+    Bitwise.bor(
+      Bitwise.bsl(cnt, 32),
+      sum
+    )
   end
 
-  defp decode_max(minmax) do
-    Bitwise.bsr(minmax, 16) - @coldest_temp
-  end
+  @compile {:inline, decode_sum: 1}
+  defp decode_sum(sumcnt), do: Bitwise.band(sumcnt, 0xFFFF_FFFF)
+  @compile {:inline, decode_cnt: 1}
+  defp decode_cnt(sumcnt), do: Bitwise.bsr(sumcnt, 32)
+  @compile {:inline, decode_min: 1}
+  defp decode_min(minmax), do: Bitwise.band(minmax, 0xFFFF) - @coldest_temp
+  @compile {:inline, decode_max: 1}
+  defp decode_max(minmax), do: Bitwise.bsr(minmax, 16) - @coldest_temp
 
   #
   # Parsing

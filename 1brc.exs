@@ -1,4 +1,9 @@
 defmodule OBRC do
+  def run() do
+    [filename] = System.argv()
+    run(filename)
+  end
+
   def run(filename) do
     blocks = break_file_into_blocks_of_lines!(filename)
 
@@ -206,4 +211,4 @@ defmodule OBRC do
   end
 end
 
-OBRC.run("measurements.txt")
+OBRC.run()

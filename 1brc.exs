@@ -1,10 +1,5 @@
 defmodule OBRC do
-  def run() do
-    [filename] = System.argv()
-    run(filename)
-  end
-
-  def run(filename) do
+  def run([filename]) do
     blocks = break_file_into_blocks_of_lines!(filename)
 
     {_pool, req_work, stop_pool} = create_pool(blocks)
@@ -224,4 +219,4 @@ defmodule OBRC do
   end
 end
 
-OBRC.run()
+OBRC.run(System.argv())

@@ -1,21 +1,30 @@
 defmodule OBRC do
   def run([filename]) do
-    blocks = break_file_into_blocks_of_lines!(filename)
-
-    {_pool, req_work, stop_pool} = create_pool(blocks)
-
-    1..System.schedulers_online()
-    |> Enum.map(fn _n ->
-      Task.async(fn -> worker(req_work) end)
-    end)
-    |> Task.await_many(:infinity)
-    |> Enum.reduce(%{}, fn a, b ->
-      Map.merge(a, b, fn _place, f1, f2 -> accum_entry(f1, f2) end)
-    end)
+    break_file_into_blocks_of_lines!(filename)
+    |> process_in_parallel(&worker/1)
+    |> Enum.reduce(
+      %{},
+      &Map.merge(&1, &2, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
+        {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
+      end)
+    )
     |> format_results()
     |> IO.puts()
+  end
+
+  defp process_in_parallel(blocks, worker_fn) do
+    {_pool, request_work, stop_pool} = create_pool(blocks)
+
+    results =
+      1..System.schedulers_online()
+      |> Enum.map(fn _n ->
+        Task.async(fn -> worker_fn.(request_work) end)
+      end)
+      |> Task.await_many(:infinity)
 
     stop_pool.()
+
+    results
   end
 
   defp create_pool(blocks) do
@@ -24,7 +33,7 @@ defmodule OBRC do
         pool_loop(blocks)
       end)
 
-    req_work = fn ->
+    request_work = fn ->
       send(pool, {:req, self()})
 
       receive do
@@ -35,7 +44,7 @@ defmodule OBRC do
 
     stop = fn -> send(pool, :exit) end
 
-    {pool, req_work, stop}
+    {pool, request_work, stop}
   end
 
   defp pool_loop([]) do
@@ -60,29 +69,29 @@ defmodule OBRC do
     end
   end
 
-  defp worker(req_work) do
+  defp worker(request_work) do
     # Create a local ETS table
     table = :ets.new(:table, [:set, :private])
 
-    update_table = fn place, temp ->
-      case :ets.lookup(table, place) do
+    update_table = fn station, temp ->
+      case :ets.lookup(table, station) do
         [] ->
-          true = :ets.insert_new(table, {place, temp, temp, temp, 1})
+          true = :ets.insert_new(table, {station, temp, temp, temp, 1})
 
         [{_key, sumtemp, mintemp, maxtemp, cnt}] ->
           :ets.insert(
             table,
-            {place, sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1}
+            {station, sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1}
           )
       end
     end
 
-    worker_loop(req_work, update_table)
+    worker_loop(request_work, update_table)
 
     # Convert ETS to Map
     map =
       :ets.tab2list(table)
-      |> Enum.map(fn {place, sum, min, max, cnt} -> {place, {sum, min, max, cnt}} end)
+      |> Enum.map(fn {station, sum, min, max, cnt} -> {station, {sum, min, max, cnt}} end)
       |> Enum.into(%{})
 
     :ets.delete(table)
@@ -90,14 +99,14 @@ defmodule OBRC do
     map
   end
 
-  defp worker_loop(req_work, update_table) do
-    case req_work.() do
+  defp worker_loop(request_work, update_table) do
+    case request_work.() do
       nil ->
         nil
 
       lazy_lines ->
         parse_lines(lazy_lines.(), update_table)
-        worker_loop(req_work, update_table)
+        worker_loop(request_work, update_table)
     end
   end
 
@@ -105,9 +114,9 @@ defmodule OBRC do
     [
       "{",
       results
-      |> Enum.map(fn {place, {sum, min, max, cnt}} ->
+      |> Enum.map(fn {station, {sum, min, max, cnt}} ->
         [
-          place,
+          station,
           "=",
           format_temp(min / 10),
           "/",
@@ -123,10 +132,6 @@ defmodule OBRC do
 
   defp format_temp(temp) do
     :erlang.float_to_binary(temp, decimals: 1)
-  end
-
-  defp accum_entry({sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2}) do
-    {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
   end
 
   #
@@ -202,17 +207,17 @@ defmodule OBRC do
 
   defp parse_station(data) do
     len = parse_station_length(data, 0)
-    <<station::binary-size(len), ?;, rest::binary>> = data
+    <<station::binary-size(len), ";", rest::binary>> = data
     {station, rest}
   end
 
-  defp parse_station_length(<<?;, _rest::binary>>, len), do: len
+  defp parse_station_length(<<";", _rest::binary>>, len), do: len
   defp parse_station_length(<<_ch, rest::binary>>, len), do: parse_station_length(rest, len + 1)
 
   defp parse_temp(data, temp \\ 0, sign \\ 1)
-  defp parse_temp(<<?-, rest::binary>>, temp, sign), do: parse_temp(rest, temp, -1 * sign)
-  defp parse_temp(<<?., rest::binary>>, temp, sign), do: parse_temp(rest, temp, sign)
-  defp parse_temp(<<?\n, rest::binary>>, temp, sign), do: {sign * temp, rest}
+  defp parse_temp(<<"-", rest::binary>>, temp, sign), do: parse_temp(rest, temp, -1 * sign)
+  defp parse_temp(<<".", rest::binary>>, temp, sign), do: parse_temp(rest, temp, sign)
+  defp parse_temp(<<"\n", rest::binary>>, temp, sign), do: {sign * temp, rest}
 
   defp parse_temp(<<ch, rest::binary>>, temp, sign) when ch in ?0..?9 do
     parse_temp(rest, temp * 10 + (ch - ?0), sign)

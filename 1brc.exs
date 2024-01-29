@@ -9,7 +9,7 @@ defmodule OBRC do
     |> IO.puts()
   end
 
-  def merge_parallel_results(results) do
+  defp merge_parallel_results(results) do
     results
     |> Enum.reduce(
       %{},
@@ -105,7 +105,7 @@ end
 
 defmodule OBRC.WorkerPool do
   def process_in_parallel(blocks, worker_fn) do
-    {_pool, request_work, stop_pool} = create_pool(blocks)
+    {_pool, request_work, stop} = create(blocks)
 
     results =
       1..System.schedulers_online()
@@ -114,15 +114,15 @@ defmodule OBRC.WorkerPool do
       end)
       |> Task.await_many(:infinity)
 
-    stop_pool.()
+    stop.()
 
     results
   end
 
-  defp create_pool(blocks) do
+  defp create(blocks) do
     pool =
       spawn(fn ->
-        pool_loop(blocks)
+        loop(blocks)
       end)
 
     request_work = fn ->
@@ -139,22 +139,22 @@ defmodule OBRC.WorkerPool do
     {pool, request_work, stop}
   end
 
-  defp pool_loop([]) do
+  defp loop([]) do
     receive do
       {:req, p} ->
         send(p, nil)
-        pool_loop([])
+        loop([])
 
       :exit ->
         nil
     end
   end
 
-  defp pool_loop([hd | tail]) do
+  defp loop([hd | tail]) do
     receive do
       {:req, p} ->
         send(p, hd)
-        pool_loop(tail)
+        loop(tail)
 
       :exit ->
         tail

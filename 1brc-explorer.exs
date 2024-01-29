@@ -15,11 +15,27 @@ defmodule OBRC do
 
   defp merge_parallel_results(results) do
     results
-    |> Enum.filter(fn
-      nil -> false
-      _ -> true
+    |> Enum.reduce(nil, fn
+      nil, nil ->
+        nil
+
+      df, nil ->
+        df
+
+      nil, df ->
+        df
+
+      df1, df2 ->
+        df1
+        |> Explorer.DataFrame.concat_rows(df2)
+        |> Explorer.DataFrame.group_by(:station)
+        |> Explorer.DataFrame.summarise(
+          mintemp: min(mintemp),
+          maxtemp: max(maxtemp),
+          cnttemp: sum(cnttemp),
+          sumtemp: sum(sumtemp)
+        )
     end)
-    |> Explorer.DataFrame.concat_rows()
     |> Explorer.DataFrame.group_by(:station)
     |> Explorer.DataFrame.summarise(
       min: min(mintemp),

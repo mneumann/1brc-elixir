@@ -7,14 +7,11 @@ defmodule OBRC do
   def run(filename) do
     blocks = break_file_into_blocks_of_lines!(filename)
 
-    pool =
-      spawn(fn ->
-        pool_loop(blocks)
-      end)
+    {_pool, req_work, stop_pool} = create_pool(blocks)
 
     1..System.schedulers_online()
     |> Enum.map(fn _n ->
-      Task.async(fn -> worker(pool) end)
+      Task.async(fn -> worker(req_work) end)
     end)
     |> Task.await_many(:infinity)
     |> Enum.reduce(%{}, fn a, b ->
@@ -23,7 +20,90 @@ defmodule OBRC do
     |> format_results()
     |> IO.puts()
 
-    send(pool, :exit)
+    stop_pool.()
+  end
+
+  defp create_pool(blocks) do
+    pool =
+      spawn(fn ->
+        pool_loop(blocks)
+      end)
+
+    req_work = fn ->
+      send(pool, {:req, self()})
+
+      receive do
+        nil -> nil
+        data -> data
+      end
+    end
+
+    stop = fn -> send(pool, :exit) end
+
+    {pool, req_work, stop}
+  end
+
+  defp pool_loop([]) do
+    receive do
+      {:req, p} ->
+        send(p, nil)
+        pool_loop([])
+
+      :exit ->
+        nil
+    end
+  end
+
+  defp pool_loop([hd | tail]) do
+    receive do
+      {:req, p} ->
+        send(p, hd)
+        pool_loop(tail)
+
+      :exit ->
+        tail
+    end
+  end
+
+  defp worker(req_work) do
+    # Create a local ETS table
+    table = :ets.new(:table, [:set, :private])
+
+    update_table = fn place, temp ->
+      case :ets.lookup(table, place) do
+        [] ->
+          true = :ets.insert_new(table, {place, temp, temp, temp, 1})
+
+        [{_key, sumtemp, mintemp, maxtemp, cnt}] ->
+          :ets.insert(
+            table,
+            {place, sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1}
+          )
+      end
+    end
+
+    worker_loop(req_work, update_table)
+
+    # Convert ETS to Map
+    map =
+      :ets.tab2list(table)
+      |> Enum.map(fn {place, sum, min, max, cnt} -> {place, {sum, min, max, cnt}} end)
+      |> Enum.into(%{})
+
+    :ets.delete(table)
+
+    map
+  end
+
+  defp worker_loop(req_work, update_table) do
+    case req_work.() do
+      nil ->
+        nil
+
+      lazy_lines ->
+        parse_lines(lazy_lines.(), update_table)
+        worker_loop(req_work, update_table)
+    end
   end
 
   defp format_results(results) do
@@ -52,73 +132,6 @@ defmodule OBRC do
 
   defp accum_entry({sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2}) do
     {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
-  end
-
-  defp worker(pool) do
-    # Create a local ETS table
-    table = :ets.new(:table, [:set, :private])
-
-    update_table = fn place, temp ->
-      case :ets.lookup(table, place) do
-        [] ->
-          true = :ets.insert_new(table, {place, temp, temp, temp, 1})
-
-        [{_key, sumtemp, mintemp, maxtemp, cnt}] ->
-          :ets.insert(
-            table,
-            {place, sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1}
-          )
-      end
-    end
-
-    worker_loop(pool, update_table)
-
-    # Convert ETS to Map
-    map =
-      :ets.tab2list(table)
-      |> Enum.map(fn {place, sum, min, max, cnt} -> {place, {sum, min, max, cnt}} end)
-      |> Enum.into(%{})
-
-    :ets.delete(table)
-
-    map
-  end
-
-  defp worker_loop(pool, update_table) do
-    # Request work
-    pool |> send({:req, self()})
-
-    receive do
-      nil ->
-        # Nothing to do
-        nil
-
-      lazy_lines ->
-        parse_lines(lazy_lines.(), update_table)
-        worker_loop(pool, update_table)
-    end
-  end
-
-  defp pool_loop([]) do
-    receive do
-      {:req, p} ->
-        send(p, nil)
-        pool_loop([])
-
-      :exit ->
-        nil
-    end
-  end
-
-  defp pool_loop([hd | tail]) do
-    receive do
-      {:req, p} ->
-        send(p, hd)
-        pool_loop(tail)
-
-      :exit ->
-        tail
-    end
   end
 
   #

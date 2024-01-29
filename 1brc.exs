@@ -1,13 +1,110 @@
 defmodule OBRC do
+  alias OBRC.{FileUtils, Worker, WorkerPool}
+
   def run([filename]) do
-    break_file_into_blocks_of_lines!(filename)
-    |> process_in_parallel(&worker/1)
+    FileUtils.break_file_into_blocks_of_lines!(filename)
+    |> WorkerPool.process_in_parallel(&Worker.run/1)
     |> merge_parallel_results()
     |> format_results()
     |> IO.puts()
   end
 
-  defp process_in_parallel(blocks, worker_fn) do
+  def merge_parallel_results(results) do
+    results
+    |> Enum.reduce(
+      %{},
+      &Map.merge(&1, &2, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
+        {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
+      end)
+    )
+  end
+
+  defp format_results(results) do
+    [
+      "{",
+      results
+      |> Enum.map(fn {station, {sum, min, max, cnt}} ->
+        [
+          station,
+          "=",
+          format_temp(min / 10),
+          "/",
+          format_temp(sum / cnt / 10),
+          "/",
+          format_temp(max / 10)
+        ]
+      end)
+      |> Enum.intersperse(", "),
+      "}"
+    ]
+  end
+
+  defp format_temp(temp) do
+    :erlang.float_to_binary(temp, decimals: 1)
+  end
+end
+
+defmodule OBRC.FileUtils do
+  @block_size 8 * 1024 * 1024
+
+  #
+  # Breaking file into blocks of lines
+  #
+  def break_file_into_blocks_of_lines!(
+        filename,
+        block_size \\ @block_size,
+        max_line_length \\ 1024
+      )
+      when is_binary(filename) and is_integer(block_size) and is_integer(max_line_length) do
+    {:ok, %{size: file_size}} = File.stat(filename)
+    {:ok, f} = :file.open(filename, [:binary])
+
+    blocks = determine_break_points!(f, file_size, 0, block_size, max_line_length)
+
+    :file.close(f)
+
+    # Return list of functions to lazy load each block of lines (within an actor)
+    blocks
+    |> Enum.map(fn {offset, length} ->
+      fn ->
+        {:ok, f} = :file.open(filename, [:binary])
+        {:ok, data} = :file.pread(f, offset, length)
+        :file.close(f)
+        data
+      end
+    end)
+  end
+
+  defp determine_break_points!(f, file_size, offset, block_size, max_line_length) do
+    remaining_bytes = file_size - offset
+
+    if remaining_bytes <= block_size do
+      [{offset, remaining_bytes}]
+    else
+      estimated_break_point = offset + block_size - Integer.floor_div(max_line_length, 2)
+
+      {:ok, block} = :file.pread(f, estimated_break_point, max_line_length)
+
+      case :binary.match(block, "\n") do
+        {start, 1} ->
+          # +1 because "\n"
+          break_point = estimated_break_point + start + 1
+          len = break_point - offset
+
+          [
+            {offset, len}
+            | determine_break_points!(f, file_size, break_point, block_size, max_line_length)
+          ]
+
+        :nomatch ->
+          raise "No line-end found within block"
+      end
+    end
+  end
+end
+
+defmodule OBRC.WorkerPool do
+  def process_in_parallel(blocks, worker_fn) do
     {_pool, request_work, stop_pool} = create_pool(blocks)
 
     results =
@@ -63,8 +160,10 @@ defmodule OBRC do
         tail
     end
   end
+end
 
-  defp worker(request_work) do
+defmodule OBRC.Worker do
+  def run(request_work) do
     # Create a local ETS table
     table = :ets.new(:table, [:set, :private])
 
@@ -81,7 +180,7 @@ defmodule OBRC do
       end
     end
 
-    worker_loop(request_work, update_table)
+    loop(request_work, update_table)
 
     # Convert ETS to Map
     map =
@@ -94,106 +193,14 @@ defmodule OBRC do
     map
   end
 
-  defp worker_loop(request_work, update_table) do
+  defp loop(request_work, update_table) do
     case request_work.() do
       nil ->
         nil
 
       lazy_lines ->
         parse_lines(lazy_lines.(), update_table)
-        worker_loop(request_work, update_table)
-    end
-  end
-
-  def merge_parallel_results(results) do
-    results
-    |> Enum.reduce(
-      %{},
-      &Map.merge(&1, &2, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
-        {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
-      end)
-    )
-  end
-
-  defp format_results(results) do
-    [
-      "{",
-      results
-      |> Enum.map(fn {station, {sum, min, max, cnt}} ->
-        [
-          station,
-          "=",
-          format_temp(min / 10),
-          "/",
-          format_temp(sum / cnt / 10),
-          "/",
-          format_temp(max / 10)
-        ]
-      end)
-      |> Enum.intersperse(", "),
-      "}"
-    ]
-  end
-
-  defp format_temp(temp) do
-    :erlang.float_to_binary(temp, decimals: 1)
-  end
-
-  #
-  # Breaking file into blocks of lines
-  #
-
-  @block_size 8 * 1024 * 1024
-
-  defp break_file_into_blocks_of_lines!(
-         filename,
-         block_size \\ @block_size,
-         max_line_length \\ 1024
-       )
-       when is_binary(filename) and is_integer(block_size) and is_integer(max_line_length) do
-    {:ok, %{size: file_size}} = File.stat(filename)
-    {:ok, f} = :file.open(filename, [:binary])
-
-    blocks = determine_break_points!(f, file_size, 0, block_size, max_line_length)
-
-    :file.close(f)
-
-    # Return list of functions to lazy load each block of lines (within an actor)
-    blocks
-    |> Enum.map(fn {offset, length} ->
-      fn ->
-        {:ok, f} = :file.open(filename, [:binary])
-        {:ok, data} = :file.pread(f, offset, length)
-        :file.close(f)
-        data
-      end
-    end)
-  end
-
-  defp determine_break_points!(f, file_size, offset, block_size, max_line_length) do
-    remaining_bytes = file_size - offset
-
-    if remaining_bytes <= block_size do
-      [{offset, remaining_bytes}]
-    else
-      estimated_break_point = offset + block_size - Integer.floor_div(max_line_length, 2)
-
-      {:ok, block} = :file.pread(f, estimated_break_point, max_line_length)
-
-      case :binary.match(block, "\n") do
-        {start, 1} ->
-          # +1 because "\n"
-          break_point = estimated_break_point + start + 1
-          len = break_point - offset
-
-          [
-            {offset, len}
-            | determine_break_points!(f, file_size, break_point, block_size, max_line_length)
-          ]
-
-        :nomatch ->
-          raise "No line-end found within block"
-      end
+        loop(request_work, update_table)
     end
   end
 

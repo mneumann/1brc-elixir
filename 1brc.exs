@@ -170,19 +170,21 @@ defmodule OBRC.Worker do
     update_table = fn station, temp ->
       case :ets.lookup(table, station) do
         [] ->
-          true = :ets.insert_new(table, {station, temp, temp, temp, 1})
+          true = :ets.insert_new(table, {station, temp, encode_minmax(temp, temp), 1})
 
-        [{_key, sumtemp, mintemp, maxtemp, cnt}] ->
+        [{_key, sumtemp, minmaxtemp, cnt}] ->
+          mintemp = decode_min(minmaxtemp)
+          maxtemp = decode_max(minmaxtemp)
+
           updates =
             if temp < mintemp or temp > maxtemp do
               [
                 {2, sumtemp + temp},
-                {3, min(mintemp, temp)},
-                {4, max(maxtemp, temp)},
-                {5, cnt + 1}
+                {3, encode_minmax(min(mintemp, temp), max(maxtemp, temp))},
+                {4, cnt + 1}
               ]
             else
-              [{2, sumtemp + temp}, {5, cnt + 1}]
+              [{2, sumtemp + temp}, {4, cnt + 1}]
             end
 
           :ets.update_element(
@@ -198,7 +200,9 @@ defmodule OBRC.Worker do
     # Convert ETS to Map
     map =
       :ets.tab2list(table)
-      |> Enum.map(fn {station, sum, min, max, cnt} -> {station, {sum, min, max, cnt}} end)
+      |> Enum.map(fn {station, sum, minmax, cnt} ->
+        {station, {sum, decode_min(minmax), decode_max(minmax), cnt}}
+      end)
       |> Enum.into(%{})
 
     :ets.delete(table)
@@ -215,6 +219,23 @@ defmodule OBRC.Worker do
         parse_lines(lazy_lines.(), update_table)
         loop(request_work, update_table)
     end
+  end
+
+  @coldest_temp 100_0
+
+  defp encode_minmax(min, max) do
+    Bitwise.bor(
+      Bitwise.bsl(max + @coldest_temp, 16),
+      min + @coldest_temp
+    )
+  end
+
+  defp decode_min(minmax) do
+    Bitwise.band(minmax, 0xFFFF) - @coldest_temp
+  end
+
+  defp decode_max(minmax) do
+    Bitwise.bsr(minmax, 16) - @coldest_temp
   end
 
   #

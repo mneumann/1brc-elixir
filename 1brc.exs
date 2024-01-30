@@ -195,7 +195,7 @@ defmodule OBRC.Store do
   def put({impl, state}, station, temp), do: {impl, apply(impl, :put, [state, station, temp])}
 
   def size({impl, state}), do: apply(impl, :size, [state])
-  def collect_into({impl, state}, into), do: apply(impl, :collect_into, [state, into])
+  def collect({impl, state}), do: apply(impl, :collect, [state])
   def close({impl, state}), do: apply(impl, :close, [state])
 end
 
@@ -243,12 +243,12 @@ defmodule OBRC.Store.ETS do
     :ets.info(table) |> Keyword.fetch!(:size)
   end
 
-  def collect_into(table, into) do
+  def collect(table) do
     :ets.tab2list(table)
     |> Enum.map(fn {station, sumcnt, minmax} ->
       {station, {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
     end)
-    |> Enum.into(into)
+    |> Enum.into(%{})
   end
 
   def close(table) do
@@ -309,12 +309,12 @@ defmodule OBRC.Store.ETS.Unencoded do
     :ets.info(table) |> Keyword.fetch!(:size)
   end
 
-  def collect_into(table, into) do
+  def collect(table) do
     :ets.tab2list(table)
     |> Enum.map(fn {station, sum, min, max, cnt} ->
       {station, {sum, min, max, cnt}}
     end)
-    |> Enum.into(into)
+    |> Enum.into(%{})
   end
 
   def close(table) do
@@ -343,7 +343,7 @@ defmodule OBRC.Store.ProcessDict do
 
   def size(state), do: state
 
-  def collect_into(_state, into) do
+  def collect(_state) do
     :erlang.get()
     |> Enum.flat_map(fn
       {station, {sum, min, max, cnt}} when is_binary(station) ->
@@ -352,12 +352,34 @@ defmodule OBRC.Store.ProcessDict do
       _ ->
         []
     end)
-    |> Enum.into(into)
+    |> Enum.into(%{})
   end
 
   def close(_state) do
     nil
   end
+end
+
+defmodule OBRC.Store.Map do
+  def new() do
+    {__MODULE__, %{}}
+  end
+
+  def put(state, station, temp) do
+    case Map.get(state, station) do
+      nil ->
+        state
+        |> Map.put(station, {temp, temp, temp, 1})
+
+      {sumtemp, mintemp, maxtemp, cnt} ->
+        state
+        |> Map.put(station, {sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1})
+    end
+  end
+
+  def size(state), do: map_size(state)
+  def collect(state), do: state
+  def close(_state), do: nil
 end
 
 defmodule OBRC.Worker do
@@ -366,7 +388,7 @@ defmodule OBRC.Worker do
       apply(store_impl, :new, [])
       |> loop(request_work)
 
-    map = OBRC.Store.collect_into(store, %{})
+    map = OBRC.Store.collect(store)
 
     store |> OBRC.Store.close()
 

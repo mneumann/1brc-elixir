@@ -1,9 +1,12 @@
 defmodule OBRC do
   alias OBRC.{FileUtils, Worker, WorkerPool}
 
-  def run([filename]) do
+  def run([filename]), do: run(filename, System.schedulers_online())
+  def run([filename, n]), do: run(filename, elem(Integer.parse(n), 0))
+
+  def run(filename, n_workers) when is_integer(n_workers) do
     FileUtils.break_file_into_blocks_of_lines!(filename)
-    |> WorkerPool.process_in_parallel(&Worker.run/1)
+    |> WorkerPool.process_in_parallel(&Worker.run/1, n: n_workers)
     |> merge_parallel_results()
     |> format_results()
     |> IO.puts()
@@ -104,11 +107,19 @@ defmodule OBRC.FileUtils do
 end
 
 defmodule OBRC.WorkerPool do
-  def process_in_parallel(blocks, worker_fn) do
+  def process_in_parallel(blocks, worker_fn, opts \\ []) do
     {_pool, request_work, stop} = create(blocks)
 
+    n =
+      case Keyword.fetch(opts, :n) do
+        :error -> System.schedulers_online()
+        {:ok, n} -> n
+      end
+
+    IO.puts("Using #{n} workers")
+
     results =
-      1..System.schedulers_online()
+      1..n
       |> Enum.map(fn _n ->
         Task.async(fn -> worker_fn.(request_work) end)
       end)

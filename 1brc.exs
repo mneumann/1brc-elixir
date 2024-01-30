@@ -4,28 +4,52 @@ defmodule OBRC do
   def run([filename]), do: run(filename)
 
   def run([filename, store_impl]),
-    do: run(filename, store_impl: store_impl)
+    do: run(filename, store_impl: parse_store_impl(store_impl))
 
   def run([filename, store_impl, n_workers]),
-    do: run(filename, store_impl: store_impl, n_workers: n_workers)
+    do:
+      run(filename,
+        store_impl: parse_store_impl(store_impl),
+        n_workers: parse_n_workers(n_workers)
+      )
+
+  defp parse_store_impl(s) when is_binary(s) do
+    case String.split(s, "=") do
+      [mod] ->
+        {String.to_atom(mod), []}
+
+      [mod, args] ->
+        {String.to_atom(mod),
+         String.split(args, ":")
+         |> Enum.chunk_every(2)
+         |> Enum.map(fn [failover, impl] ->
+           {failover_sz, _} = Integer.parse(failover)
+           {failover_sz, String.to_atom(impl)}
+         end)}
+    end
+  end
+
+  defp parse_n_workers(n) when is_binary(n) do
+    {n, _} = Integer.parse(n)
+    n
+  end
 
   def run(filename, opts \\ []) do
     n_workers =
       case Keyword.fetch(opts, :n_workers) do
         :error -> System.schedulers_online()
         {:ok, n} when is_integer(n) -> n
-        {:ok, n} when is_binary(n) -> elem(Integer.parse(n), 0)
       end
 
-    store_impl =
+    {store_impl, store_impl_args} =
       case Keyword.fetch(opts, :store_impl) do
-        :error -> OBRC.Store.ETS
-        {:ok, impl} when is_atom(impl) -> impl
-        {:ok, impl} when is_binary(impl) -> String.to_atom(impl)
+        :error -> {OBRC.Store.ETS, []}
+        {:ok, {impl, args}} when is_atom(impl) and is_list(args) -> {impl, args}
       end
 
     FileUtils.break_file_into_blocks_of_lines!(filename)
-    |> WorkerPool.process_in_parallel(fn request_work -> Worker.run(request_work, store_impl) end,
+    |> WorkerPool.process_in_parallel(
+      fn request_work -> Worker.run(request_work, {store_impl, store_impl_args}) end,
       n: n_workers
     )
     |> merge_parallel_results()
@@ -200,7 +224,7 @@ defmodule OBRC.Store do
 end
 
 defmodule OBRC.Store.ETS do
-  def new() do
+  def new([]) do
     table = :ets.new(:table, [:set, :private])
     {__MODULE__, table}
   end
@@ -285,7 +309,7 @@ defmodule OBRC.Store.ETS do
 end
 
 defmodule OBRC.Store.ETS.Unencoded do
-  def new() do
+  def new([]) do
     table = :ets.new(:table, [:set, :private])
     {__MODULE__, table}
   end
@@ -324,7 +348,7 @@ defmodule OBRC.Store.ETS.Unencoded do
 end
 
 defmodule OBRC.Store.ProcessDict do
-  def new() do
+  def new([]) do
     state = 0
     {__MODULE__, state}
   end
@@ -370,7 +394,7 @@ defmodule OBRC.Store.ProcessDict do
 end
 
 defmodule OBRC.Store.Map do
-  def new() do
+  def new([]) do
     {__MODULE__, %{}}
   end
 
@@ -392,11 +416,9 @@ defmodule OBRC.Store.Map do
 end
 
 defmodule OBRC.Store.Adaptive do
-  @adaptive_impls [{nil, OBRC.Store.ProcessDict}, {414, OBRC.Store.ETS}]
-
-  def new() do
-    [{nil, initial_impl} | failover] = @adaptive_impls
-    state = {initial_impl.new(), [], failover}
+  def new(args) do
+    [{0, initial_impl} | failover] = args
+    state = {initial_impl.new([]), [], failover}
     {__MODULE__, state}
   end
 
@@ -410,7 +432,7 @@ defmodule OBRC.Store.Adaptive do
     if OBRC.Store.size(st) > failover_sz do
       collected_st = OBRC.Store.collect(st)
       OBRC.Store.close(st)
-      {apply(failover_impl, :new, []), [collected_st | st_tail], failover_rest}
+      {apply(failover_impl, :new, [[]]), [collected_st | st_tail], failover_rest}
     else
       {st, st_tail, failover}
     end
@@ -446,9 +468,9 @@ defmodule OBRC.Store.Adaptive do
 end
 
 defmodule OBRC.Worker do
-  def run(request_work, store_impl) do
+  def run(request_work, {store_impl, store_impl_args}) do
     store =
-      apply(store_impl, :new, [])
+      apply(store_impl, :new, [store_impl_args])
       |> loop(request_work)
 
     map = OBRC.Store.collect(store)

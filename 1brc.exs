@@ -6,7 +6,9 @@ defmodule OBRC do
 
   def run(filename, n_workers) when is_integer(n_workers) do
     FileUtils.break_file_into_blocks_of_lines!(filename)
-    |> WorkerPool.process_in_parallel(&Worker.run/1, n: n_workers)
+    |> WorkerPool.process_in_parallel(fn request_work -> Worker.run(request_work) end,
+      n: n_workers
+    )
     |> merge_parallel_results()
     |> format_results()
     |> IO.puts()
@@ -50,9 +52,6 @@ end
 defmodule OBRC.FileUtils do
   @block_size 8 * 1024 * 1024
 
-  #
-  # Breaking file into blocks of lines
-  #
   def break_file_into_blocks_of_lines!(
         filename,
         block_size \\ @block_size,
@@ -260,8 +259,8 @@ defmodule OBRC.Store.ETS do
 end
 
 defmodule OBRC.Worker do
-  def run(request_work) do
-    store = OBRC.Store.ETS.new()
+  def run(request_work, store_impl \\ OBRC.Store.ETS) do
+    store = apply(store_impl, :new, [])
 
     loop({request_work, store})
     map = OBRC.Store.collect_into(store, %{})
@@ -282,10 +281,6 @@ defmodule OBRC.Worker do
         loop(state)
     end
   end
-
-  #
-  # Parsing
-  #
 
   defp parse_lines(<<>>, _store), do: nil
 

@@ -173,20 +173,18 @@ end
 
 defmodule OBRC.Store do
   @compile {:inline, put: 3}
-  def put({{put, _, _}, state}, station, temp), do: put.(state, station, temp)
-  def collect_into({{_, collect_into, _}, state}, into), do: collect_into.(state, into)
-  def close({{_, _, close}, state}), do: close.(state)
+  def put({impl, state}, station, temp), do: {impl, apply(impl, :put, [state, station, temp])}
+  def collect_into({impl, state}, into), do: apply(impl, :collect_into, [state, into])
+  def close({impl, state}), do: apply(impl, :close, [state])
 end
 
 defmodule OBRC.Store.ETS do
   def new() do
     table = :ets.new(:table, [:set, :private])
-    fntable = {&put/3, &collect_into/2, &close/1}
-    {fntable, table}
+    {__MODULE__, table}
   end
 
-  @compile {:inline, put: 3}
-  defp put(table, station, temp) do
+  def put(table, station, temp) do
     case :ets.lookup(table, station) do
       [] ->
         true =
@@ -220,7 +218,7 @@ defmodule OBRC.Store.ETS do
     end
   end
 
-  defp collect_into(table, into) do
+  def collect_into(table, into) do
     :ets.tab2list(table)
     |> Enum.map(fn {station, sumcnt, minmax} ->
       {station, {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
@@ -228,7 +226,7 @@ defmodule OBRC.Store.ETS do
     |> Enum.into(into)
   end
 
-  defp close(table) do
+  def close(table) do
     :ets.delete(table)
     nil
   end

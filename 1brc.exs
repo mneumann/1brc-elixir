@@ -313,6 +313,41 @@ defmodule OBRC.Store.ETS.Unencoded do
   end
 end
 
+defmodule OBRC.Store.ProcessDict do
+  def new() do
+    state = 0
+    {__MODULE__, state}
+  end
+
+  def put(state, station, temp) do
+    case :erlang.get(station) do
+      :undefined ->
+        :erlang.put(station, {temp, temp, temp, 1})
+        state + 1
+
+      {sumtemp, mintemp, maxtemp, cnt} ->
+        :erlang.put(station, {sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1})
+        state
+    end
+  end
+
+  def collect_into(_state, into) do
+    :erlang.get()
+    |> Enum.flat_map(fn
+      {station, {sum, min, max, cnt}} when is_binary(station) ->
+        [{station, {sum, min, max, cnt}}]
+
+      _ ->
+        []
+    end)
+    |> Enum.into(into)
+  end
+
+  def close(_state) do
+    nil
+  end
+end
+
 defmodule OBRC.Worker do
   def run(request_work, store_impl) do
     store =

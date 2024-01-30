@@ -71,6 +71,7 @@ defmodule OBRC do
     [
       "{",
       results
+      |> Enum.sort_by(fn {station, _} -> station end)
       |> Enum.map(fn {station, {sum, min, max, cnt}} ->
         [
           station,

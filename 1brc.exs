@@ -172,23 +172,21 @@ defmodule OBRC.WorkerPool do
   end
 end
 
-defprotocol OBRC.Store do
-  def put(store, station, temp)
-  def collect_into(store, into)
-  def close(store)
+defmodule OBRC.Store do
+  @compile {:inline, put: 3}
+  def put({put, _collect_into, _close}, station, temp), do: put.(station, temp)
+  def collect_into({_put, collect_into, _close}, into), do: collect_into.(into)
+  def close({_put, _collect_into, close}), do: close.()
 end
 
 defmodule OBRC.Store.ETS do
-  defstruct [:table]
-
-  alias __MODULE__, as: Self
-
   def new() do
     table = :ets.new(:table, [:set, :private])
-    %Self{table: table}
+    {fn a, b -> put(table, a, b) end, fn a -> collect_into(table, a) end, fn -> close(table) end}
   end
 
-  def put(%Self{table: table}, station, temp) do
+  @compile {:inline, put: 3}
+  defp put(table, station, temp) do
     case :ets.lookup(table, station) do
       [] ->
         true =
@@ -220,16 +218,15 @@ defmodule OBRC.Store.ETS do
     end
   end
 
-  def collect_into(%Self{table: table}, into) do
-      :ets.tab2list(table)
-      |> Enum.map(fn {station, sumcnt, minmax} ->
-        {station,
-         {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
-      end)
-      |> Enum.into(into)
+  defp collect_into(table, into) do
+    :ets.tab2list(table)
+    |> Enum.map(fn {station, sumcnt, minmax} ->
+      {station, {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
+    end)
+    |> Enum.into(into)
   end
 
-  def close(%Self{table: table}) do
+  defp close(table) do
     :ets.delete(table)
     nil
   end
@@ -260,12 +257,6 @@ defmodule OBRC.Store.ETS do
   defp decode_min(minmax), do: Bitwise.band(minmax, 0xFFFF) - @coldest_temp
   @compile {:inline, decode_max: 1}
   defp decode_max(minmax), do: Bitwise.bsr(minmax, 16) - @coldest_temp
-end
-
-defimpl OBRC.Store, for: OBRC.Store.ETS do
-  def put(store, station, temp), do: OBRC.Store.ETS.put(store, station, temp)
-  def collect_into(store, into), do: OBRC.Store.ETS.collect_into(store, into)
-  def close(store), do: OBRC.Store.ETS.close(store)
 end
 
 defmodule OBRC.Worker do

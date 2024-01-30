@@ -67,9 +67,9 @@ defmodule OBRC.FileUtils do
     blocks
     |> Enum.map(fn {offset, length} ->
       fn ->
-        {:ok, f} = :file.open(filename, [:binary])
-        {:ok, data} = :file.pread(f, offset, length)
-        :file.close(f)
+        {:ok, f} = :prim_file.open(filename, [:binary, :raw, :read])
+        {:ok, data} = :prim_file.pread(f, offset, length)
+        :prim_file.close(f)
         data
       end
     end)

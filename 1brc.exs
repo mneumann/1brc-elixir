@@ -66,16 +66,15 @@ defmodule OBRC.FileUtils do
 
     :file.close(f)
 
-    # Return list of functions to lazy load each block of lines (within an actor)
     blocks
-    |> Enum.map(fn {offset, length} ->
-      fn ->
-        {:ok, f} = :prim_file.open(filename, [:binary, :raw, :read])
-        {:ok, data} = :prim_file.pread(f, offset, length)
-        :prim_file.close(f)
-        data
-      end
-    end)
+    |> Enum.map(fn {offset, length} -> {:block, filename, offset, length} end)
+  end
+
+  def read_block({:block, filename, offset, length}) do
+    {:ok, f} = :prim_file.open(filename, [:binary, :raw, :read])
+    {:ok, data} = :prim_file.pread(f, offset, length)
+    :prim_file.close(f)
+    data
   end
 
   defp determine_break_points!(f, file_size, offset, block_size, max_line_length) do
@@ -231,8 +230,11 @@ defmodule OBRC.Worker do
       nil ->
         nil
 
-      lazy_lines ->
-        parse_lines(lazy_lines.(), update_table)
+      block ->
+        block
+        |> OBRC.FileUtils.read_block()
+        |> parse_lines(update_table)
+
         loop(state)
     end
   end

@@ -172,71 +172,66 @@ defmodule OBRC.WorkerPool do
   end
 end
 
-defmodule OBRC.Worker do
-  def run(request_work) do
-    # Create a local ETS table
+defprotocol OBRC.Store do
+  def put(store, station, temp)
+  def collect_into(store, into)
+  def close(store)
+end
+
+defmodule OBRC.Store.ETS do
+  defstruct [:table]
+
+  alias __MODULE__, as: Self
+
+  def new() do
     table = :ets.new(:table, [:set, :private])
+    %Self{table: table}
+  end
 
-    update_table = fn station, temp ->
-      case :ets.lookup(table, station) do
-        [] ->
-          true =
-            :ets.insert_new(table, {station, encode_sumcnt(temp, 1), encode_minmax(temp, temp)})
+  def put(%Self{table: table}, station, temp) do
+    case :ets.lookup(table, station) do
+      [] ->
+        true =
+          :ets.insert_new(table, {station, encode_sumcnt(temp, 1), encode_minmax(temp, temp)})
 
-        [{_key, sumcnt, minmax}] ->
-          mintemp = decode_min(minmax)
-          maxtemp = decode_max(minmax)
-          sumtemp = decode_sum(sumcnt)
-          cnt = decode_cnt(sumcnt)
+      [{_key, sumcnt, minmax}] ->
+        mintemp = decode_min(minmax)
+        maxtemp = decode_max(minmax)
+        sumtemp = decode_sum(sumcnt)
+        cnt = decode_cnt(sumcnt)
 
-          new_sumcnt = encode_sumcnt(sumtemp + temp, cnt + 1)
+        new_sumcnt = encode_sumcnt(sumtemp + temp, cnt + 1)
 
-          updates =
-            if temp < mintemp or temp > maxtemp do
-              [
-                {2, new_sumcnt},
-                {3, encode_minmax(min(mintemp, temp), max(maxtemp, temp))}
-              ]
-            else
-              {2, new_sumcnt}
-            end
+        updates =
+          if temp < mintemp or temp > maxtemp do
+            [
+              {2, new_sumcnt},
+              {3, encode_minmax(min(mintemp, temp), max(maxtemp, temp))}
+            ]
+          else
+            {2, new_sumcnt}
+          end
 
-          :ets.update_element(
-            table,
-            station,
-            updates
-          )
-      end
+        :ets.update_element(
+          table,
+          station,
+          updates
+        )
     end
+  end
 
-    loop({request_work, update_table})
-
-    # Convert ETS to Map
-    map =
+  def collect_into(%Self{table: table}, into) do
       :ets.tab2list(table)
       |> Enum.map(fn {station, sumcnt, minmax} ->
         {station,
          {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
       end)
-      |> Enum.into(%{})
-
-    :ets.delete(table)
-
-    map
+      |> Enum.into(into)
   end
 
-  defp loop({request_work, update_table} = state) do
-    case request_work.() do
-      nil ->
-        nil
-
-      block ->
-        block
-        |> OBRC.FileUtils.read_block()
-        |> parse_lines(update_table)
-
-        loop(state)
-    end
+  def close(%Self{table: table}) do
+    :ets.delete(table)
+    nil
   end
 
   @coldest_temp 100_0
@@ -265,18 +260,49 @@ defmodule OBRC.Worker do
   defp decode_min(minmax), do: Bitwise.band(minmax, 0xFFFF) - @coldest_temp
   @compile {:inline, decode_max: 1}
   defp decode_max(minmax), do: Bitwise.bsr(minmax, 16) - @coldest_temp
+end
+
+defimpl OBRC.Store, for: OBRC.Store.ETS do
+  def put(store, station, temp), do: OBRC.Store.ETS.put(store, station, temp)
+  def collect_into(store, into), do: OBRC.Store.ETS.collect_into(store, into)
+  def close(store), do: OBRC.Store.ETS.close(store)
+end
+
+defmodule OBRC.Worker do
+  def run(request_work) do
+    store = OBRC.Store.ETS.new()
+
+    loop({request_work, store})
+    map = OBRC.Store.collect_into(store, %{})
+    OBRC.Store.close(store)
+    map
+  end
+
+  defp loop({request_work, store} = state) do
+    case request_work.() do
+      nil ->
+        nil
+
+      block ->
+        block
+        |> OBRC.FileUtils.read_block()
+        |> parse_lines(store)
+
+        loop(state)
+    end
+  end
 
   #
   # Parsing
   #
 
-  defp parse_lines(<<>>, _cb), do: nil
+  defp parse_lines(<<>>, _store), do: nil
 
-  defp parse_lines(data, cb) do
+  defp parse_lines(data, store) do
     {station, rest} = parse_station(data)
     {temp, rest} = parse_temp(rest)
-    cb.(station, temp)
-    parse_lines(rest, cb)
+    store |> OBRC.Store.put(station, temp)
+    parse_lines(rest, store)
   end
 
   defp parse_station(data) do

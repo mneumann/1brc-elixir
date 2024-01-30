@@ -330,13 +330,13 @@ defmodule OBRC.Store.ProcessDict do
   end
 
   def put(state, station, temp) do
-    case :erlang.get(station) do
-      :undefined ->
-        :erlang.put(station, {temp, temp, temp, 1})
+    case Process.get(station, nil) do
+      nil ->
+        Process.put(station, {temp, temp, temp, 1})
         state + 1
 
       {sumtemp, mintemp, maxtemp, cnt} ->
-        :erlang.put(station, {sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1})
+        Process.put(station, {sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1})
         state
     end
   end
@@ -344,7 +344,7 @@ defmodule OBRC.Store.ProcessDict do
   def size(state), do: state
 
   def collect(_state) do
-    :erlang.get()
+    Process.get()
     |> Enum.flat_map(fn
       {station, {sum, min, max, cnt}} when is_binary(station) ->
         [{station, {sum, min, max, cnt}}]
@@ -356,7 +356,7 @@ defmodule OBRC.Store.ProcessDict do
   end
 
   def close(_state) do
-    :erlang.get()
+    Process.get()
     |> Enum.each(fn
       {station, _} when is_binary(station) ->
         Process.delete(station)

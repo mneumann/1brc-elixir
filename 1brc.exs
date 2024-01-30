@@ -213,9 +213,9 @@ defmodule OBRC.Store.ETS do
           station,
           updates
         )
-
-        table
     end
+
+    table
   end
 
   def collect_into(table, into) do
@@ -261,35 +261,36 @@ end
 
 defmodule OBRC.Worker do
   def run(request_work, store_impl \\ OBRC.Store.ETS) do
-    store = apply(store_impl, :new, [])
+    store =
+      apply(store_impl, :new, [])
+      |> loop(request_work)
 
-    loop({request_work, store})
     map = OBRC.Store.collect_into(store, %{})
-    OBRC.Store.close(store)
+
+    store |> OBRC.Store.close()
+
     map
   end
 
-  defp loop({request_work, store} = state) do
+  defp loop(store, request_work) do
     case request_work.() do
       nil ->
-        nil
+        store
 
       block ->
-        block
-        |> OBRC.FileUtils.read_block()
-        |> parse_lines(store)
-
-        loop(state)
+          block
+          |> OBRC.FileUtils.read_block()
+          |> parse_lines(store)
+          |> loop(request_work)
     end
   end
 
-  defp parse_lines(<<>>, _store), do: nil
+  defp parse_lines(<<>>, store), do: store
 
   defp parse_lines(data, store) do
     {station, rest} = parse_station(data)
     {temp, rest} = parse_temp(rest)
-    store |> OBRC.Store.put(station, temp)
-    parse_lines(rest, store)
+    parse_lines(rest, store |> OBRC.Store.put(station, temp))
   end
 
   defp parse_station(data) do

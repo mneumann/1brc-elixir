@@ -1,12 +1,31 @@
 defmodule OBRC do
   alias OBRC.{FileUtils, Worker, WorkerPool}
 
-  def run([filename]), do: run(filename, System.schedulers_online())
-  def run([filename, n]), do: run(filename, elem(Integer.parse(n), 0))
+  def run([filename]), do: run(filename)
 
-  def run(filename, n_workers) when is_integer(n_workers) do
+  def run([filename, store_impl]),
+    do: run(filename, store_impl: store_impl)
+
+  def run([filename, store_impl, n_workers]),
+    do: run(filename, store_impl: store_impl, n_workers: n_workers)
+
+  def run(filename, opts \\ []) do
+    n_workers =
+      case Keyword.fetch(opts, :n_workers) do
+        :error -> System.schedulers_online()
+        {:ok, n} when is_integer(n) -> n
+        {:ok, n} when is_binary(n) -> elem(Integer.parse(n), 0)
+      end
+
+    store_impl =
+      case Keyword.fetch(opts, :store_impl) do
+        :error -> OBRC.Store.ETS
+        {:ok, impl} when is_atom(impl) -> impl
+        {:ok, impl} when is_binary(impl) -> String.to_atom(impl)
+      end
+
     FileUtils.break_file_into_blocks_of_lines!(filename)
-    |> WorkerPool.process_in_parallel(fn request_work -> Worker.run(request_work) end,
+    |> WorkerPool.process_in_parallel(fn request_work -> Worker.run(request_work, store_impl) end,
       n: n_workers
     )
     |> merge_parallel_results()
@@ -259,8 +278,43 @@ defmodule OBRC.Store.ETS do
   defp decode_max(minmax), do: Bitwise.bsr(minmax, 16) - @coldest_temp
 end
 
+defmodule OBRC.Store.ETS.Unencoded do
+  def new() do
+    table = :ets.new(:table, [:set, :private])
+    {__MODULE__, table}
+  end
+
+  def put(table, station, temp) do
+    case :ets.lookup(table, station) do
+      [] ->
+        :ets.insert_new(table, {station, temp, temp, temp, 1})
+
+      [{_key, sumtemp, mintemp, maxtemp, cnt}] ->
+        :ets.insert(
+          table,
+          {station, sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1}
+        )
+    end
+
+    table
+  end
+
+  def collect_into(table, into) do
+    :ets.tab2list(table)
+    |> Enum.map(fn {station, sum, min, max, cnt} ->
+      {station, {sum, min, max, cnt}}
+    end)
+    |> Enum.into(into)
+  end
+
+  def close(table) do
+    :ets.delete(table)
+    nil
+  end
+end
+
 defmodule OBRC.Worker do
-  def run(request_work, store_impl \\ OBRC.Store.ETS) do
+  def run(request_work, store_impl) do
     store =
       apply(store_impl, :new, [])
       |> loop(request_work)
@@ -278,10 +332,10 @@ defmodule OBRC.Worker do
         store
 
       block ->
-          block
-          |> OBRC.FileUtils.read_block()
-          |> parse_lines(store)
-          |> loop(request_work)
+        block
+        |> OBRC.FileUtils.read_block()
+        |> parse_lines(store)
+        |> loop(request_work)
     end
   end
 

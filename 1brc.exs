@@ -382,6 +382,57 @@ defmodule OBRC.Store.Map do
   def close(_state), do: nil
 end
 
+defmodule OBRC.Store.Adaptive do
+  @failover 500
+
+  def new() do
+    state = {:low, OBRC.Store.ProcessDict.new()}
+    {__MODULE__, state}
+  end
+
+  def put({:low, inner_state}, station, temp) do
+    new_inner_state = OBRC.Store.put(inner_state, station, temp)
+
+    if OBRC.Store.size(new_inner_state) > @failover do
+      {:high, OBRC.Store.ETS.new(), new_inner_state}
+    else
+      {:low, new_inner_state}
+    end
+  end
+
+  def put({:high, inner_state, low_inner_state}, station, temp) do
+    new_inner_state = OBRC.Store.put(inner_state, station, temp)
+    {:high, new_inner_state, low_inner_state}
+  end
+
+  def size({:low, inner_state}), do: OBRC.Store.size(inner_state)
+
+  def size({:high, inner_state, low_inner_state}),
+    do: OBRC.Store.size(inner_state) + OBRC.Store.size(low_inner_state)
+
+  def collect({:low, inner_state}) do
+    OBRC.Store.collect(inner_state)
+  end
+
+  def collect({:high, inner_state, low_inner_state}) do
+    a = OBRC.Store.collect(inner_state)
+    b = OBRC.Store.collect(low_inner_state)
+
+    Map.merge(a, b, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
+      {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
+    end)
+  end
+
+  def close({:low, inner_state}) do
+    OBRC.Store.close(inner_state)
+  end
+
+  def close({:high, inner_state, low_inner_state}) do
+    OBRC.Store.close(inner_state)
+    OBRC.Store.close(low_inner_state)
+  end
+end
+
 defmodule OBRC.Worker do
   def run(request_work, store_impl) do
     store =

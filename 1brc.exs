@@ -392,7 +392,7 @@ defmodule OBRC.Store.Map do
 end
 
 defmodule OBRC.Store.Adaptive do
-  @adaptive_impls [{nil, OBRC.Store.ProcessDict}, {500, OBRC.Store.ETS}]
+  @adaptive_impls [{nil, OBRC.Store.ProcessDict}, {414, OBRC.Store.ETS}]
 
   def new() do
     [{nil, initial_impl} | failover] = @adaptive_impls

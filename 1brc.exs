@@ -356,6 +356,15 @@ defmodule OBRC.Store.ProcessDict do
   end
 
   def close(_state) do
+    :erlang.get()
+    |> Enum.each(fn
+      {station, _} when is_binary(station) ->
+        Process.delete(station)
+
+      _ ->
+        []
+    end)
+
     nil
   end
 end

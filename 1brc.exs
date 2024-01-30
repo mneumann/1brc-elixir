@@ -210,7 +210,7 @@ defmodule OBRC.Worker do
       end
     end
 
-    loop(request_work, update_table)
+    loop({request_work, update_table})
 
     # Convert ETS to Map
     map =
@@ -226,14 +226,14 @@ defmodule OBRC.Worker do
     map
   end
 
-  defp loop(request_work, update_table) do
+  defp loop({request_work, update_table} = state) do
     case request_work.() do
       nil ->
         nil
 
       lazy_lines ->
         parse_lines(lazy_lines.(), update_table)
-        loop(request_work, update_table)
+        loop(state)
     end
   end
 

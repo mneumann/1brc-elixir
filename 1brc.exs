@@ -383,53 +383,57 @@ defmodule OBRC.Store.Map do
 end
 
 defmodule OBRC.Store.Adaptive do
-  @failover 500
+  @adaptive_impls [{nil, OBRC.Store.ProcessDict}, {500, OBRC.Store.ETS}]
 
   def new() do
-    state = {:low, OBRC.Store.ProcessDict.new()}
+    [{nil, initial_impl} | failover] = @adaptive_impls
+    state = {[initial_impl.new()], failover}
     {__MODULE__, state}
   end
 
-  def put({:low, inner_state}, station, temp) do
-    new_inner_state = OBRC.Store.put(inner_state, station, temp)
+  def put(
+        {[st | st_tail], [{failover_sz, failover_impl} | failover_rest] = failover},
+        station,
+        temp
+      ) do
+    st = st |> OBRC.Store.put(station, temp)
 
-    if OBRC.Store.size(new_inner_state) > @failover do
-      {:high, OBRC.Store.ETS.new(), new_inner_state}
+    if OBRC.Store.size(st) > failover_sz do
+      {[apply(failover_impl, :new, []) | [st | st_tail]], failover_rest}
     else
-      {:low, new_inner_state}
+      {[st | st_tail], failover}
     end
   end
 
-  def put({:high, inner_state, low_inner_state}, station, temp) do
-    new_inner_state = OBRC.Store.put(inner_state, station, temp)
-    {:high, new_inner_state, low_inner_state}
+  def put({[st | st_tail], []}, station, temp) do
+    st = st |> OBRC.Store.put(station, temp)
+    {[st | st_tail], []}
   end
 
-  def size({:low, inner_state}), do: OBRC.Store.size(inner_state)
-
-  def size({:high, inner_state, low_inner_state}),
-    do: OBRC.Store.size(inner_state) + OBRC.Store.size(low_inner_state)
-
-  def collect({:low, inner_state}) do
-    OBRC.Store.collect(inner_state)
+  def size({states, _}) do
+    states |> Enum.reduce(0, &(OBRC.Store.size(&1) + &2))
   end
 
-  def collect({:high, inner_state, low_inner_state}) do
-    a = OBRC.Store.collect(inner_state)
-    b = OBRC.Store.collect(low_inner_state)
+  def collect({[st], _}) do
+    OBRC.Store.collect(st)
+  end
 
+  def collect({states, _}) do
+    states
+    |> Enum.reduce(
+      %{},
+      fn e, acc -> merge(OBRC.Store.collect(e), acc) end
+    )
+  end
+
+  defp merge(a, b) do
     Map.merge(a, b, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
       {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
     end)
   end
 
-  def close({:low, inner_state}) do
-    OBRC.Store.close(inner_state)
-  end
-
-  def close({:high, inner_state, low_inner_state}) do
-    OBRC.Store.close(inner_state)
-    OBRC.Store.close(low_inner_state)
+  def close({states, _}) do
+    states |> Enum.each(&OBRC.Store.close(&1))
   end
 end
 

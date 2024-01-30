@@ -173,15 +173,16 @@ end
 
 defmodule OBRC.Store do
   @compile {:inline, put: 3}
-  def put({put, _collect_into, _close}, station, temp), do: put.(station, temp)
-  def collect_into({_put, collect_into, _close}, into), do: collect_into.(into)
-  def close({_put, _collect_into, close}), do: close.()
+  def put({{put, _, _}, state}, station, temp), do: put.(state, station, temp)
+  def collect_into({{_, collect_into, _}, state}, into), do: collect_into.(state, into)
+  def close({{_, _, close}, state}), do: close.(state)
 end
 
 defmodule OBRC.Store.ETS do
   def new() do
     table = :ets.new(:table, [:set, :private])
-    {fn a, b -> put(table, a, b) end, fn a -> collect_into(table, a) end, fn -> close(table) end}
+    fntable = {&put/3, &collect_into/2, &close/1}
+    {fntable, table}
   end
 
   @compile {:inline, put: 3}
@@ -214,6 +215,8 @@ defmodule OBRC.Store.ETS do
           station,
           updates
         )
+
+        table
     end
   end
 

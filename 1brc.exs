@@ -193,6 +193,8 @@ end
 defmodule OBRC.Store do
   @compile {:inline, put: 3}
   def put({impl, state}, station, temp), do: {impl, apply(impl, :put, [state, station, temp])}
+
+  def size({impl, state}), do: apply(impl, :size, [state])
   def collect_into({impl, state}, into), do: apply(impl, :collect_into, [state, into])
   def close({impl, state}), do: apply(impl, :close, [state])
 end
@@ -235,6 +237,10 @@ defmodule OBRC.Store.ETS do
     end
 
     table
+  end
+
+  def size(table) do
+    :ets.info(table) |> Keyword.fetch!(:size)
   end
 
   def collect_into(table, into) do
@@ -299,6 +305,10 @@ defmodule OBRC.Store.ETS.Unencoded do
     table
   end
 
+  def size(table) do
+    :ets.info(table) |> Keyword.fetch!(:size)
+  end
+
   def collect_into(table, into) do
     :ets.tab2list(table)
     |> Enum.map(fn {station, sum, min, max, cnt} ->
@@ -330,6 +340,8 @@ defmodule OBRC.Store.ProcessDict do
         state
     end
   end
+
+  def size(state), do: state
 
   def collect_into(_state, into) do
     :erlang.get()

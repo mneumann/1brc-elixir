@@ -387,42 +387,41 @@ defmodule OBRC.Store.Adaptive do
 
   def new() do
     [{nil, initial_impl} | failover] = @adaptive_impls
-    state = {[initial_impl.new()], failover}
+    state = {initial_impl.new(), [], failover}
     {__MODULE__, state}
   end
 
   def put(
-        {[st | st_tail], [{failover_sz, failover_impl} | failover_rest] = failover},
+        {st, st_tail, [{failover_sz, failover_impl} | failover_rest] = failover},
         station,
         temp
       ) do
     st = st |> OBRC.Store.put(station, temp)
 
     if OBRC.Store.size(st) > failover_sz do
-      {[apply(failover_impl, :new, []) | [st | st_tail]], failover_rest}
+      collected_st = OBRC.Store.collect(st)
+      OBRC.Store.close(st)
+      {apply(failover_impl, :new, []), [collected_st | st_tail], failover_rest}
     else
-      {[st | st_tail], failover}
+      {st, st_tail, failover}
     end
   end
 
-  def put({[st | st_tail], []}, station, temp) do
+  def put({st, st_tail, []}, station, temp) do
     st = st |> OBRC.Store.put(station, temp)
-    {[st | st_tail], []}
+    {st, st_tail, []}
   end
 
-  def size({states, _}) do
-    states |> Enum.reduce(0, &(OBRC.Store.size(&1) + &2))
+  def size({st, st_tail, _}) do
+    Enum.reduce(st_tail, 0, &(map_size(&1) + &2)) +
+      OBRC.Store.size(st)
   end
 
-  def collect({[st], _}) do
-    OBRC.Store.collect(st)
-  end
-
-  def collect({states, _}) do
-    states
+  def collect({st, st_tail, _}) do
+    st_tail
     |> Enum.reduce(
-      %{},
-      fn e, acc -> merge(OBRC.Store.collect(e), acc) end
+      OBRC.Store.collect(st),
+      &merge/2
     )
   end
 
@@ -432,8 +431,8 @@ defmodule OBRC.Store.Adaptive do
     end)
   end
 
-  def close({states, _}) do
-    states |> Enum.each(&OBRC.Store.close(&1))
+  def close({st, _st_tail, _}) do
+    OBRC.Store.close(st)
   end
 end
 

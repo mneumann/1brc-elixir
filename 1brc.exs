@@ -429,7 +429,7 @@ defmodule OBRC.Store.Map do
 end
 
 defmodule OBRC.Store.Merge do
-  @merge_every 1_000
+  @merge_every 100
 
   def new([]) do
     state = {0, [], []}
@@ -441,7 +441,22 @@ defmodule OBRC.Store.Merge do
     |> maybe_merge()
   end
 
-  def compact(state), do: state
+  def compact(state) do
+    {0, [], partitions} = merge(state)
+
+    {0, [],
+     Enum.map(partitions, fn {station, sum, min, max, cnt} ->
+       {copy_station(station), sum, min, max, cnt}
+     end)}
+  end
+
+  defp copy_station(station) do
+    if :binary.referenced_byte_size(station) > byte_size(station) do
+      :binary.copy(station)
+    else
+      station
+    end
+  end
 
   def size({sz, _, partitions}), do: sz + Enum.count(partitions)
 
@@ -480,7 +495,7 @@ defmodule OBRC.Store.Merge do
         {min, max} = Enum.min_max(temps)
         sum = Enum.sum(temps)
         cnt = Enum.count(temps)
-        {:binary.copy(station), sum, min, max, cnt}
+        {station, sum, min, max, cnt}
     end)
     |> Enum.reverse()
   end
@@ -501,23 +516,23 @@ defmodule OBRC.Store.Merge do
   end
 
   defp merge_partitions(
-         [{s1, _, _, _, _} = hd1 | tl1] = part1,
-         [{s2, _, _, _, _} = hd2 | tl2] = part2,
+         [hd1 | tl1] = part1,
+         [hd2 | tl2] = part2,
          result
        ) do
+    {station1, sum1, min1, max1, cnt1} = hd1
+    {station2, sum2, min2, max2, cnt2} = hd2
+
     cond do
-      s1 < s2 ->
+      station1 < station2 ->
         merge_partitions(tl1, part2, [hd1 | result])
 
-      s1 > s2 ->
+      station1 > station2 ->
         merge_partitions(part1, tl2, [hd2 | result])
 
-      s1 == s2 ->
-        {_, sum1, min1, max1, cnt1} = hd1
-        {_, sum2, min2, max2, cnt2} = hd2
-
+      true ->
         merge_partitions(tl1, tl2, [
-          {s1, sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2} | result
+          {station1, sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2} | result
         ])
     end
   end

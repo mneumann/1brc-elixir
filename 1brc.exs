@@ -6,12 +6,25 @@ defmodule OBRC do
   def run([filename, store_impl]),
     do: run(filename, store_impl: parse_store_impl(store_impl))
 
-  def run([filename, store_impl, n_workers]),
+  def run([filename, store_impl, block_size]),
     do:
       run(filename,
         store_impl: parse_store_impl(store_impl),
+        block_size: parse_block_size(block_size)
+      )
+
+  def run([filename, store_impl, block_size, n_workers]),
+    do:
+      run(filename,
+        store_impl: parse_store_impl(store_impl),
+        block_size: parse_block_size(block_size),
         n_workers: parse_n_workers(n_workers)
       )
+
+  defp parse_block_size(s) when is_binary(s) do
+    {block_size, _} = Integer.parse(s)
+    block_size
+  end
 
   defp parse_store_impl(s) when is_binary(s) do
     case String.split(s, "=") do
@@ -41,13 +54,19 @@ defmodule OBRC do
         {:ok, n} when is_integer(n) -> n
       end
 
+    block_size =
+      case Keyword.fetch(opts, :block_size) do
+        :error -> 8 * 1024 * 1024
+        {:ok, n} when is_integer(n) -> n
+      end
+
     {store_impl, store_impl_args} =
       case Keyword.fetch(opts, :store_impl) do
         :error -> {OBRC.Store.ETS, []}
         {:ok, {impl, args}} when is_atom(impl) and is_list(args) -> {impl, args}
       end
 
-    FileUtils.break_file_into_blocks_of_lines!(filename)
+    FileUtils.break_file_into_blocks_of_lines!(filename, block_size)
     |> WorkerPool.process_in_parallel(
       fn request_work -> Worker.run(request_work, {store_impl, store_impl_args}) end,
       n: n_workers
@@ -94,11 +113,9 @@ defmodule OBRC do
 end
 
 defmodule OBRC.FileUtils do
-  @block_size 8 * 1024 * 1024
-
   def break_file_into_blocks_of_lines!(
         filename,
-        block_size \\ @block_size,
+        block_size,
         max_line_length \\ 1024
       )
       when is_binary(filename) and is_integer(block_size) and is_integer(max_line_length) do

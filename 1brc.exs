@@ -261,7 +261,7 @@ defmodule OBRC.Store.ETS do
   end
 
   defp decode_min(encoded_minmax), do: Bitwise.bsr(encoded_minmax, 11) - @coldest_temp
-  defp decode_max(encoded_minmax), do: Bitwise.band(encoded_minmax, 2047) - @coldest_temp
+  defp decode_max(encoded_minmax), do: Bitwise.band(encoded_minmax, 2048 - 1) - @coldest_temp
 
   # We use +100.0 degree as default min value
   @default_min_encoded Bitwise.bsl(@coldest_temp + @coldest_temp, 11)
@@ -682,47 +682,40 @@ end
 
 defmodule OBRC.Worker do
   def run(request_work, {store_impl, store_impl_args}) do
-    store =
-      apply(store_impl, :new, [store_impl_args])
-      |> loop(request_work)
+    pat = :binary.compile_pattern(";")
+    store = apply(store_impl, :new, [store_impl_args])
+    store = loop(store, request_work, pat)
 
     map = OBRC.Store.collect(store)
 
-    store |> OBRC.Store.close()
+    OBRC.Store.close(store)
 
     map
   end
 
-  defp loop(store, request_work) do
+  defp loop(store, request_work, pat) do
     case request_work.() do
       nil ->
         store
 
       block ->
-        block
-        |> OBRC.FileUtils.read_block()
-        |> parse_lines(store)
-        |> OBRC.Store.compact()
-        |> loop(request_work)
+        data = OBRC.FileUtils.read_block(block)
+
+        store = process_lines(data, store, pat)
+        store = OBRC.Store.compact(store)
+
+        loop(store, request_work, pat)
     end
   end
 
-  defp parse_lines(<<>>, store), do: store
+  defp process_lines(<<>>, store, _pat), do: store
 
-  defp parse_lines(data, store) do
-    {station, rest} = parse_station(data)
+  defp process_lines(data, store, pat) do
+    [station, rest] = :binary.split(data, pat)
     {temp, rest} = parse_temp(rest)
-    parse_lines(rest, store |> OBRC.Store.put(station, temp))
+    store = OBRC.Store.put(store, station, temp)
+    process_lines(rest, store, pat)
   end
-
-  defp parse_station(data) do
-    len = parse_station_length(data, 0)
-    <<station::binary-size(len), ";", rest::binary>> = data
-    {station, rest}
-  end
-
-  defp parse_station_length(<<";", _rest::binary>>, len), do: len
-  defp parse_station_length(<<_ch, rest::binary>>, len), do: parse_station_length(rest, len + 1)
 
   defp parse_temp(data, temp \\ 0, sign \\ 1)
   defp parse_temp(<<"-", rest::binary>>, temp, sign), do: parse_temp(rest, temp, -1 * sign)

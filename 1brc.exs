@@ -717,13 +717,42 @@ defmodule OBRC.Worker do
     process_lines(rest, store, pat)
   end
 
-  defp parse_temp(data, temp \\ 0, sign \\ 1)
-  defp parse_temp(<<"-", rest::binary>>, temp, sign), do: parse_temp(rest, temp, -1 * sign)
-  defp parse_temp(<<".", rest::binary>>, temp, sign), do: parse_temp(rest, temp, sign)
-  defp parse_temp(<<"\n", rest::binary>>, temp, sign), do: {sign * temp, rest}
+  @compile {:inline, parse_temp: 1}
 
-  defp parse_temp(<<ch, rest::binary>>, temp, sign) when ch in ?0..?9 do
-    parse_temp(rest, temp * 10 + (ch - ?0), sign)
+  defp parse_temp(<<"-", d2, d1, ".", d0, "\n", rest::binary>>) do
+    if d2 in ?0..?9 and d1 in ?0..?9 and d0 in ?0..?9 do
+      temp = -(100 * (d2 - ?0) + 10 * (d1 - ?0) + (d0 - ?0))
+      {temp, rest}
+    else
+      raise "Malformed temp"
+    end
+  end
+
+  defp parse_temp(<<"-", d1, ".", d0, "\n", rest::binary>>) do
+    if d1 in ?0..?9 and d0 in ?0..?9 do
+      temp = -(10 * (d1 - ?0) + (d0 - ?0))
+      {temp, rest}
+    else
+      raise "Malformed temp"
+    end
+  end
+
+  defp parse_temp(<<d2, d1, ".", d0, "\n", rest::binary>>) do
+    if d2 in ?0..?9 and d1 in ?0..?9 and d0 in ?0..?9 do
+      temp = 100 * (d2 - ?0) + 10 * (d1 - ?0) + (d0 - ?0)
+      {temp, rest}
+    else
+      raise "Malformed temp"
+    end
+  end
+
+  defp parse_temp(<<d1, ".", d0, "\n", rest::binary>>) do
+    if d1 in ?0..?9 and d0 in ?0..?9 do
+      temp = 10 * (d1 - ?0) + (d0 - ?0)
+      {temp, rest}
+    else
+      raise "Malformed temp"
+    end
   end
 end
 

@@ -235,10 +235,12 @@ defmodule OBRC.Store.ETS do
   def put(table, station, temp) do
     case :ets.lookup(table, station) do
       [] ->
-        true =
-          :ets.insert_new(table, {station, encode_sumcnt(temp, 1), encode_minmax(temp, temp)})
+        :ets.insert_new(
+          table,
+          {:binary.copy(station), encode_sumcnt(temp, 1), encode_minmax(temp, temp)}
+        )
 
-      [{_key, sumcnt, minmax}] ->
+      [{station, sumcnt, minmax}] ->
         mintemp = decode_min(minmax)
         maxtemp = decode_max(minmax)
         sumtemp = decode_sum(sumcnt)

@@ -317,21 +317,33 @@ end
 
 defmodule OBRC.Store.ETS.Unencoded do
   def new([]) do
-    table = :ets.new(:table, [:set, :private])
+    table = :ets.new(:table, [:set, :private, decentralized_counters: false])
     {__MODULE__, table}
   end
 
-  def put(table, station, temp) do
-    case :ets.lookup(table, station) do
-      [] ->
-        :ets.insert_new(table, {station, temp, temp, temp, 1})
+  @default_tuple {nil, 0, 0, 100, -100}
+  @sum_pos 2
+  @cnt_pos 3
+  @min_pos 4
+  @max_pos 5
 
-      [{_key, sumtemp, mintemp, maxtemp, cnt}] ->
-        :ets.insert(
-          table,
-          {station, sumtemp + temp, min(mintemp, temp), max(maxtemp, temp), cnt + 1}
-        )
-    end
+  def put(table, station, temp) do
+    [_sum, _cnt, min, max] =
+      :ets.update_counter(
+        table,
+        station,
+        [{@sum_pos, temp}, {@cnt_pos, 1}, {@min_pos, 0}, {@max_pos, 0}],
+        @default_tuple
+      )
+
+    updates = if temp < min, do: [{@min_pos, temp}], else: []
+    updates = if temp > max, do: [{@max_pos, temp} | updates], else: updates
+
+    :ets.update_element(
+      table,
+      station,
+      updates
+    )
 
     table
   end
@@ -343,11 +355,9 @@ defmodule OBRC.Store.ETS.Unencoded do
   end
 
   def collect(table) do
-    :ets.tab2list(table)
-    |> Enum.map(fn {station, sum, min, max, cnt} ->
+    for {station, sum, cnt, min, max} <- :ets.tab2list(table), into: %{} do
       {station, {sum, min, max, cnt}}
-    end)
-    |> Enum.into(%{})
+    end
   end
 
   def close(table) do

@@ -228,122 +228,53 @@ end
 
 defmodule OBRC.Store.ETS do
   def new([]) do
-    table = :ets.new(:table, [:set, :private, {:decentralized_counters, false}])
-    {__MODULE__, table}
-  end
-
-  # {station, sumcnt, min_max}
-  @default_minmax 0xFFFF_FFFF
-  @default_tuple {nil, 0, @default_minmax}
-
-  @sumcnt_pos 2
-  @minmax_pos 3
-
-  def put(table, station, temp) do
-    [_sumcnt, minmax] =
-      :ets.update_counter(
-        table,
-        station,
-        [{@sumcnt_pos, encode_sumcnt(temp, 1)}, {@minmax_pos, 0}],
-        @default_tuple
-      )
-
-    if minmax == @default_minmax do
-      :ets.update_element(
-        table,
-        station,
-        {@minmax_pos, encode_minmax(temp, temp)}
-      )
-    else
-      mintemp = decode_min(minmax)
-      maxtemp = decode_max(minmax)
-
-      if temp < mintemp or temp > maxtemp do
-        :ets.update_element(
-          table,
-          station,
-          {@minmax_pos, encode_minmax(min(mintemp, temp), max(maxtemp, temp))}
-        )
-      end
-    end
-
-    table
-  end
-
-  def compact(table), do: table
-
-  def size(table) do
-    :ets.info(table) |> Keyword.fetch!(:size)
-  end
-
-  def collect(table) do
-    for {station, sumcnt, minmax} <- :ets.tab2list(table), into: %{} do
-      {station, {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
-    end
-  end
-
-  def close(table) do
-    :ets.delete(table)
-    nil
-  end
-
-  @coldest_temp 100_0
-
-  @compile {:inline, encode_minmax: 2}
-  defp encode_minmax(min, max) do
-    Bitwise.bor(
-      Bitwise.bsl(max + @coldest_temp, 16),
-      min + @coldest_temp
-    )
-  end
-
-  @compile {:inline, encode_sumcnt: 2}
-  defp encode_sumcnt(sum, cnt) do
-    Bitwise.bor(
-      Bitwise.bsl(cnt, 32),
-      sum
-    )
-  end
-
-  @compile {:inline, decode_sum: 1}
-  defp decode_sum(sumcnt), do: Bitwise.band(sumcnt, 0xFFFF_FFFF)
-  @compile {:inline, decode_cnt: 1}
-  defp decode_cnt(sumcnt), do: Bitwise.bsr(sumcnt, 32)
-  @compile {:inline, decode_min: 1}
-  defp decode_min(minmax), do: Bitwise.band(minmax, 0xFFFF) - @coldest_temp
-  @compile {:inline, decode_max: 1}
-  defp decode_max(minmax), do: Bitwise.bsr(minmax, 16) - @coldest_temp
-end
-
-defmodule OBRC.Store.ETS.Unencoded do
-  def new([]) do
     table = :ets.new(:table, [:set, :private, decentralized_counters: false])
     {__MODULE__, table}
   end
 
-  @default_tuple {nil, 0, 0, 100, -100}
+  @coldest_temp 100_0
+
+  @compile {:inline, encode_minmax: 2, decode_min: 1, decode_max: 1}
+
+  defp encode_minmax(mintemp, maxtemp) do
+    Bitwise.bor(
+      Bitwise.bsl(mintemp + @coldest_temp, 11),
+      maxtemp + @coldest_temp
+    )
+  end
+
+  defp decode_min(encoded_minmax), do: Bitwise.bsr(encoded_minmax, 11) - @coldest_temp
+  defp decode_max(encoded_minmax), do: Bitwise.band(encoded_minmax, 2047) - @coldest_temp
+
+  # We use +100.0 degree as default min value
+  @default_min_encoded Bitwise.bsl(@coldest_temp + @coldest_temp, 11)
+  # We use -100.0 degree as default max value
+  @default_max_encoded -@coldest_temp + @coldest_temp
+
+  @default_tuple {nil, 0, 0, Bitwise.bor(@default_min_encoded, @default_max_encoded)}
   @sum_pos 2
   @cnt_pos 3
-  @min_pos 4
-  @max_pos 5
+  @minmax_pos 4
 
   def put(table, station, temp) do
-    [_sum, _cnt, min, max] =
+    [_sum, _cnt, encoded_minmax] =
       :ets.update_counter(
         table,
         station,
-        [{@sum_pos, temp}, {@cnt_pos, 1}, {@min_pos, 0}, {@max_pos, 0}],
+        [{@sum_pos, temp}, {@cnt_pos, 1}, {@minmax_pos, 0}],
         @default_tuple
       )
 
-    updates = if temp < min, do: [{@min_pos, temp}], else: []
-    updates = if temp > max, do: [{@max_pos, temp} | updates], else: updates
+    min = decode_min(encoded_minmax)
+    max = decode_max(encoded_minmax)
 
-    :ets.update_element(
-      table,
-      station,
-      updates
-    )
+    if temp < min or temp > max do
+      :ets.update_element(
+        table,
+        station,
+        {@minmax_pos, encode_minmax(min(temp, min), max(temp, max))}
+      )
+    end
 
     table
   end
@@ -355,8 +286,8 @@ defmodule OBRC.Store.ETS.Unencoded do
   end
 
   def collect(table) do
-    for {station, sum, cnt, min, max} <- :ets.tab2list(table), into: %{} do
-      {station, {sum, min, max, cnt}}
+    for {station, sum, cnt, minmax} <- :ets.tab2list(table), into: %{} do
+      {station, {sum, decode_min(minmax), decode_max(minmax), cnt}}
     end
   end
 

@@ -228,41 +228,43 @@ end
 
 defmodule OBRC.Store.ETS do
   def new([]) do
-    table = :ets.new(:table, [:set, :private])
+    table = :ets.new(:table, [:set, :private, {:decentralized_counters, false}])
     {__MODULE__, table}
   end
 
+  # {station, sumcnt, min_max}
+  @default_minmax 0xFFFF_FFFF
+  @default_tuple {nil, 0, @default_minmax}
+
+  @sumcnt_pos 2
+  @minmax_pos 3
+
   def put(table, station, temp) do
-    case :ets.lookup(table, station) do
-      [] ->
-        :ets.insert_new(
-          table,
-          {:binary.copy(station), encode_sumcnt(temp, 1), encode_minmax(temp, temp)}
-        )
+    [_sumcnt, minmax] =
+      :ets.update_counter(
+        table,
+        station,
+        [{@sumcnt_pos, encode_sumcnt(temp, 1)}, {@minmax_pos, 0}],
+        @default_tuple
+      )
 
-      [{station, sumcnt, minmax}] ->
-        mintemp = decode_min(minmax)
-        maxtemp = decode_max(minmax)
-        sumtemp = decode_sum(sumcnt)
-        cnt = decode_cnt(sumcnt)
+    if minmax == @default_minmax do
+      :ets.update_element(
+        table,
+        station,
+        {@minmax_pos, encode_minmax(temp, temp)}
+      )
+    else
+      mintemp = decode_min(minmax)
+      maxtemp = decode_max(minmax)
 
-        new_sumcnt = encode_sumcnt(sumtemp + temp, cnt + 1)
-
-        updates =
-          if temp < mintemp or temp > maxtemp do
-            [
-              {2, new_sumcnt},
-              {3, encode_minmax(min(mintemp, temp), max(maxtemp, temp))}
-            ]
-          else
-            {2, new_sumcnt}
-          end
-
+      if temp < mintemp or temp > maxtemp do
         :ets.update_element(
           table,
           station,
-          updates
+          {@minmax_pos, encode_minmax(min(mintemp, temp), max(maxtemp, temp))}
         )
+      end
     end
 
     table
@@ -275,11 +277,9 @@ defmodule OBRC.Store.ETS do
   end
 
   def collect(table) do
-    :ets.tab2list(table)
-    |> Enum.map(fn {station, sumcnt, minmax} ->
+    for {station, sumcnt, minmax} <- :ets.tab2list(table), into: %{} do
       {station, {decode_sum(sumcnt), decode_min(minmax), decode_max(minmax), decode_cnt(sumcnt)}}
-    end)
-    |> Enum.into(%{})
+    end
   end
 
   def close(table) do

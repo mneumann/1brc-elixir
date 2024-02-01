@@ -599,6 +599,66 @@ defmodule OBRC.Store.MergeMap do
   end
 end
 
+defmodule OBRC.Store.MergeMap2 do
+  @merge_every 100
+
+  def new([]) do
+    state = {%{}, %{}}
+    {__MODULE__, state}
+  end
+
+  def put({entries, map} = _state, station, temp) do
+    {put_map(entries, station, temp), map}
+    |> maybe_merge()
+  end
+
+  defp put_map(map, station, temp) do
+    case Map.get(map, station) do
+      nil ->
+        Map.put(map, station, {temp, temp, temp, 1})
+
+      {sum, min, max, cnt} ->
+        Map.put(map, station, {sum + temp, min(min, temp), max(max, temp), cnt + 1})
+    end
+  end
+
+  def compact(state) do
+    {%{}, map} = merge(state)
+    new_map = for {station, value} <- map, into: %{}, do: {copy_station(station), value}
+    {%{}, new_map}
+  end
+
+  defp copy_station(station) do
+    if :binary.referenced_byte_size(station) > byte_size(station) do
+      :binary.copy(station)
+    else
+      station
+    end
+  end
+
+  def size({entries, map}), do: map_size(entries) + map_size(map)
+
+  def collect(state) do
+    {%{}, map} = merge(state)
+    map
+  end
+
+  def close(_state), do: nil
+
+  defp maybe_merge({entries, _} = state) when map_size(entries) > @merge_every, do: merge(state)
+  defp maybe_merge({_, _} = state), do: state
+
+  defp merge_entries(entries, map) do
+    Map.merge(entries, map, fn _station, {sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2} ->
+      {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
+    end)
+  end
+
+  defp merge({entries, map}) do
+    {%{}, merge_entries(entries, map)}
+  end
+end
+
 defmodule OBRC.Store.Adaptive do
   def new(args) do
     [{0, initial_impl} | failover] = args

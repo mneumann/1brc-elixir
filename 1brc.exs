@@ -428,6 +428,117 @@ defmodule OBRC.Store.Map do
   def close(_state), do: nil
 end
 
+defmodule OBRC.Store.Merge do
+  @merge_every 1_000
+
+  def new([]) do
+    state = {0, [], []}
+    {__MODULE__, state}
+  end
+
+  def put({sz, entries, partitions} = _state, station, temp) do
+    {sz + 1, [{station, temp} | entries], partitions}
+    |> maybe_merge()
+  end
+
+  def compact(state), do: state
+
+  def size({sz, _, partitions}), do: sz + Enum.count(partitions)
+
+  def collect(state) do
+    {0, [], partitions} = merge(state)
+
+    for {station, sum, min, max, cnt} <- partitions,
+        into: %{},
+        do: {station, {sum, min, max, cnt}}
+  end
+
+  def close(_state), do: nil
+
+  defp maybe_merge({sz, _, _} = state) do
+    if sz > @merge_every, do: merge(state), else: state
+  end
+
+  defp partition_entries(entries) do
+    # Partitions sorted by {station, :desc}
+    entries
+    |> List.keysort(0)
+    |> Enum.reduce([], fn
+      {station, temp}, [{station, temps} | otherpartitions] ->
+        [{station, [temp | temps]} | otherpartitions]
+
+      {station, temp}, partitions ->
+        [{station, [temp]} | partitions]
+    end)
+  end
+
+  defp reduce_partitions(partitions) do
+    # Incoming partitions sorted by {station, :desc}
+    partitions
+    |> Enum.map(fn
+      {station, temps} ->
+        {min, max} = Enum.min_max(temps)
+        sum = Enum.sum(temps)
+        cnt = Enum.count(temps)
+        {:binary.copy(station), sum, min, max, cnt}
+    end)
+    |> Enum.reverse()
+  end
+
+  # Stations in both partitions are sorted ascending
+  # Result is descending -> we need to reverse it at the end 
+
+  defp merge_partitions([], [], result) do
+    result
+  end
+
+  defp merge_partitions([hd | tl], [], result) do
+    merge_partitions(tl, [], [hd | result])
+  end
+
+  defp merge_partitions([], [hd | tl], result) do
+    merge_partitions([], tl, [hd | result])
+  end
+
+  defp merge_partitions(
+         [{s1, _, _, _, _} = hd1 | tl1] = part1,
+         [{s2, _, _, _, _} = hd2 | tl2] = part2,
+         result
+       ) do
+    cond do
+      s1 < s2 ->
+        merge_partitions(tl1, part2, [hd1 | result])
+
+      s1 > s2 ->
+        merge_partitions(part1, tl2, [hd2 | result])
+
+      s1 == s2 ->
+        {_, sum1, min1, max1, cnt1} = hd1
+        {_, sum2, min2, max2, cnt2} = hd2
+
+        merge_partitions(tl1, tl2, [
+          {s1, sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2} | result
+        ])
+    end
+  end
+
+  defp merge({0, [], partitions}) do
+    {0, [], partitions}
+  end
+
+  defp merge({_n, entries, partitions}) do
+    updated_partitions =
+      entries
+      |> partition_entries()
+      |> reduce_partitions()
+      |> Enum.reverse()
+      |> merge_partitions(partitions, [])
+      |> Enum.reverse()
+
+    {0, [], updated_partitions}
+  end
+end
+
 defmodule OBRC.Store.Adaptive do
   def new(args) do
     [{0, initial_impl} | failover] = args

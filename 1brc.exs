@@ -432,7 +432,7 @@ defmodule OBRC.Store.Merge do
   @merge_every 100
 
   def new([]) do
-    state = {0, [], []}
+    state = {0, [], {:asc, []}}
     {__MODULE__, state}
   end
 
@@ -442,12 +442,13 @@ defmodule OBRC.Store.Merge do
   end
 
   def compact(state) do
-    {0, [], partitions} = merge(state)
+    {0, [], {sort, partitions}} = merge(state)
 
     {0, [],
-     Enum.map(partitions, fn {station, sum, min, max, cnt} ->
-       {copy_station(station), sum, min, max, cnt}
-     end)}
+     {sort,
+      Enum.map(partitions, fn {station, sum, min, max, cnt} ->
+        {copy_station(station), sum, min, max, cnt}
+      end)}}
   end
 
   defp copy_station(station) do
@@ -458,10 +459,10 @@ defmodule OBRC.Store.Merge do
     end
   end
 
-  def size({sz, _, partitions}), do: sz + Enum.count(partitions)
+  def size({sz, _, {_, partitions}}), do: sz + Enum.count(partitions)
 
   def collect(state) do
-    {0, [], partitions} = merge(state)
+    {0, [], {_, partitions}} = merge(state)
 
     for {station, sum, min, max, cnt} <- partitions,
         into: %{},
@@ -475,33 +476,22 @@ defmodule OBRC.Store.Merge do
   end
 
   defp partition_entries(entries) do
-    # Partitions sorted by {station, :desc}
-    entries
-    |> List.keysort(0)
-    |> Enum.reduce([], fn
-      {station, temp}, [{station, temps} | otherpartitions] ->
-        [{station, [temp | temps]} | otherpartitions]
+    partitions =
+      List.keysort(entries, 0, :desc)
+      |> Enum.reduce([], fn
+        {station, temp}, [{station, sum, min, max, cnt} | otherpartitions] ->
+          [{station, sum + temp, min(min, temp), max(max, temp), cnt + 1} | otherpartitions]
 
-      {station, temp}, partitions ->
-        [{station, [temp]} | partitions]
-    end)
+        {station, temp}, partitions ->
+          [{station, temp, temp, temp, 1} | partitions]
+      end)
+
+    {:asc, partitions}
   end
 
-  defp reduce_partitions(partitions) do
-    # Incoming partitions sorted by {station, :desc}
-    partitions
-    |> Enum.map(fn
-      {station, temps} ->
-        {min, max} = Enum.min_max(temps)
-        sum = Enum.sum(temps)
-        cnt = Enum.count(temps)
-        {station, sum, min, max, cnt}
-    end)
-    |> Enum.reverse()
+  defp merge_partitions({:asc, part1}, {:asc, part2}) do
+    {:asc, merge_partitions(part1, part2, []) |> Enum.reverse()}
   end
-
-  # Stations in both partitions are sorted ascending
-  # Result is descending -> we need to reverse it at the end 
 
   defp merge_partitions([], [], result) do
     result
@@ -542,15 +532,7 @@ defmodule OBRC.Store.Merge do
   end
 
   defp merge({_n, entries, partitions}) do
-    updated_partitions =
-      entries
-      |> partition_entries()
-      |> reduce_partitions()
-      |> Enum.reverse()
-      |> merge_partitions(partitions, [])
-      |> Enum.reverse()
-
-    {0, [], updated_partitions}
+    {0, [], partition_entries(entries) |> merge_partitions(partitions)}
   end
 end
 

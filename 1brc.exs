@@ -581,27 +581,26 @@ defmodule OBRC.Store.MergeMap do
   @compile {:inline, accum_group: 1}
   @compile {:inline, accum_groups: 2}
 
-  defp accum_group(group) when is_list(group) do
+  defp accum_group({_, _, _, _} = group), do: group
+
+  defp accum_group([_ | _] = group) do
     sum = Enum.sum(group)
     cnt = Enum.count(group)
     {min, max} = Enum.min_max(group)
     {sum, min, max, cnt}
   end
 
-  defp accum_group(group) when is_tuple(group) do
-    group
-  end
-
-  defp accum_groups(group1, group2) do
-    {sum1, min1, max1, cnt1} = accum_group(group1)
-    {sum2, min2, max2, cnt2} = accum_group(group2)
+  defp accum_groups({sum1, min1, max1, cnt1}, {sum2, min2, max2, cnt2}) do
     {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
   end
 
-  defp merge_entries(entries, map) do
-    groups = Enum.group_by(entries, &elem(&1, 0), &elem(&1, 1))
+  defp accum_groups(group1, group2) do
+    accum_groups(accum_group(group1), accum_group(group2))
+  end
 
-    Map.merge(map, groups, fn _key, left, right -> accum_groups(left, right) end)
+  defp merge_entries(entries, map) do
+    Enum.group_by(entries, &elem(&1, 0), &elem(&1, 1))
+    |> Map.merge(map, fn _key, left, right -> accum_groups(left, right) end)
   end
 
   defp merge({_n, entries, map}) do

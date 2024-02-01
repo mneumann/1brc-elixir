@@ -537,7 +537,7 @@ defmodule OBRC.Store.Merge do
 end
 
 defmodule OBRC.Store.MergeMap do
-  @merge_every 100
+  @merge_every 120
 
   def new([]) do
     state = {0, [], %{}}
@@ -551,7 +551,10 @@ defmodule OBRC.Store.MergeMap do
 
   def compact(state) do
     {0, [], map} = merge(state)
-    new_map = for {station, value} <- map, into: %{}, do: {copy_station(station), value}
+
+    new_map =
+      for {station, value} <- map, into: %{}, do: {copy_station(station), accum_group(value)}
+
     {0, [], new_map}
   end
 
@@ -566,7 +569,7 @@ defmodule OBRC.Store.MergeMap do
   def size({sz, _, map}), do: sz + map_size(map)
 
   def collect(state) do
-    {0, [], map} = merge(state)
+    {0, [], map} = compact(state)
     map
   end
 
@@ -575,23 +578,30 @@ defmodule OBRC.Store.MergeMap do
   defp maybe_merge({sz, _, _} = state) when sz > @merge_every, do: merge(state)
   defp maybe_merge({_sz, _, _} = state), do: state
 
+  @compile {:inline, accum_group: 1}
+  @compile {:inline, accum_groups: 2}
+
+  defp accum_group(group) when is_list(group) do
+    sum = Enum.sum(group)
+    cnt = Enum.count(group)
+    {min, max} = Enum.min_max(group)
+    {sum, min, max, cnt}
+  end
+
+  defp accum_group(group) when is_tuple(group) do
+    group
+  end
+
+  defp accum_groups(group1, group2) do
+    {sum1, min1, max1, cnt1} = accum_group(group1)
+    {sum2, min2, max2, cnt2} = accum_group(group2)
+    {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}
+  end
+
   defp merge_entries(entries, map) do
-    groups =
-      Enum.group_by(entries, fn {station, _temp} -> station end, fn {_station, temp} -> temp end)
+    groups = Enum.group_by(entries, &elem(&1, 0), &elem(&1, 1))
 
-    for {station, group} <- groups, into: %{} do
-      cnt1 = Enum.count(group)
-      sum1 = Enum.sum(group)
-      {min1, max1} = Enum.min_max(group)
-
-      case Map.get(map, station) do
-        nil ->
-          {station, {sum1, min1, max1, cnt1}}
-
-        {sum2, min2, max2, cnt2} ->
-          {station, {sum1 + sum2, min(min1, min2), max(max1, max2), cnt1 + cnt2}}
-      end
-    end
+    Map.merge(map, groups, fn _key, left, right -> accum_groups(left, right) end)
   end
 
   defp merge({_n, entries, map}) do

@@ -219,6 +219,8 @@ defmodule OBRC.Store do
   @compile {:inline, put: 3}
   def put({impl, state}, station, temp), do: {impl, apply(impl, :put, [state, station, temp])}
 
+  def compact({impl, state}), do: {impl, apply(impl, :compact, [state])}
+
   def size({impl, state}), do: apply(impl, :size, [state])
   def collect({impl, state}), do: apply(impl, :collect, [state])
   def close({impl, state}), do: apply(impl, :close, [state])
@@ -263,6 +265,8 @@ defmodule OBRC.Store.ETS do
 
     table
   end
+
+  def compact(table), do: table
 
   def size(table) do
     :ets.info(table) |> Keyword.fetch!(:size)
@@ -330,6 +334,8 @@ defmodule OBRC.Store.ETS.Unencoded do
     table
   end
 
+  def compact(table), do: table
+
   def size(table) do
     :ets.info(table) |> Keyword.fetch!(:size)
   end
@@ -365,6 +371,8 @@ defmodule OBRC.Store.ProcessDict do
         state
     end
   end
+
+  def compact(state), do: state
 
   def size(state), do: state
 
@@ -411,6 +419,8 @@ defmodule OBRC.Store.Map do
     end
   end
 
+  def compact(state), do: state
+
   def size(state), do: map_size(state)
   def collect(state), do: state
   def close(_state), do: nil
@@ -443,6 +453,8 @@ defmodule OBRC.Store.Adaptive do
     st = st |> OBRC.Store.put(station, temp)
     {st, st_tail, []}
   end
+
+  def compact(state), do: state
 
   def size({st, st_tail, _}) do
     Enum.reduce(st_tail, 0, &(map_size(&1) + &2)) +
@@ -490,6 +502,7 @@ defmodule OBRC.Worker do
         block
         |> OBRC.FileUtils.read_block()
         |> parse_lines(store)
+        |> OBRC.Store.compact()
         |> loop(request_work)
     end
   end

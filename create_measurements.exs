@@ -2,22 +2,20 @@ defmodule CreateMeasurements do
   defp stations() do
     File.stream!("data/weather_stations.csv")
     |> Stream.reject(&String.starts_with?(&1, "#"))
-    |> Stream.map(fn line ->
+    |> Enum.map(fn line ->
       [station, temp] = line |> String.trim() |> String.split(";")
       {temp, ""} = Float.parse(temp)
       {station, temp}
     end)
-    |> Stream.with_index()
-    |> Stream.map(fn {data, index} -> {index, data} end)
-    |> Enum.into(%{})
+    |> :array.from_list()
   end
 
-  defp gen_random(n, stations) when is_map(stations) do
-    size = map_size(stations)
+  defp gen_random(n, stations) do
+    size = :array.size(stations)
 
     for _ <- 1..n do
       index = :rand.uniform(size) - 1
-      {station, temp} = stations |> Map.get(index)
+      {station, temp} = :array.get(index, stations)
       delta = :rand.uniform(21) - 11
       temp = (temp |> trunc) + delta
       fract = :rand.uniform(10) - 1
